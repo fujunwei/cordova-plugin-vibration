@@ -46,12 +46,14 @@ public class Vibration extends CordovaPlugin {
     private Speaker mSpeaker;
     private HandlerThread mHandlerThread;
     private Handler mHandler;
-    long soundTime;
+    private PlaybackRunnable mPlaybackRunnable;
+    long[] mPatternArray;
 
     /**
      * Constructor.
      */
     public Vibration() {
+        pwmSpeakerVibrate();
     }
 
     /**
@@ -90,6 +92,20 @@ public class Vibration extends CordovaPlugin {
         return true;
     }
 
+    private void pwmSpeakerVibrate() {
+        try {
+            mSpeaker = new Speaker(BoardDefaults.getPwmPin());
+            mSpeaker.stop(); // in case the PWM pin was enabled already
+        } catch (IOException e) {
+            Log.e(TAG, "Error initializing speaker");
+            return; // don't initilize the handler
+        }
+
+        mHandlerThread = new HandlerThread("pwm-playback");
+        mHandlerThread.start();
+        mHandler = new Handler(mHandlerThread.getLooper());
+    }
+
     //--------------------------------------------------------------------------
     // LOCAL METHODS
     //--------------------------------------------------------------------------
@@ -105,20 +121,12 @@ public class Vibration extends CordovaPlugin {
             time = 500;
         }
 
-        soundTime = time;
+        mPatternArray = new long[2];
+        mPatternArray[0] = 0;
+        mPatternArray[1] = time;
 
         if (true) {
-            try {
-                mSpeaker = new Speaker(BoardDefaults.getPwmPin());
-                mSpeaker.stop(); // in case the PWM pin was enabled already
-            } catch (IOException e) {
-                Log.e(TAG, "Error initializing speaker");
-                return; // don't initilize the handler
-            }
-
-            mHandlerThread = new HandlerThread("pwm-playback");
-            mHandlerThread.start();
-            mHandler = new Handler(mHandlerThread.getLooper());
+            mPlaybackRunnable = new PlaybackRunnable();
             mHandler.post(mPlaybackRunnable);
         } else {
             AudioManager manager = (AudioManager) this.cordova.getActivity().getSystemService(Context.AUDIO_SERVICE);
@@ -129,9 +137,10 @@ public class Vibration extends CordovaPlugin {
         }
     }
 
-    private Runnable mPlaybackRunnable = new Runnable() {
+    private class PlaybackRunnable implements Runnable {
 
         private double note = G4;
+        private int index = 0;
 
         @Override
         public void run() {
@@ -140,18 +149,30 @@ public class Vibration extends CordovaPlugin {
             }
 
             try {
-                if (note > 0) {
-                    mSpeaker.play(G4);
-                    note = REST;
-                } else {
-                    mSpeaker.stop();
+                if (index < mPatternArray.length) {
+                    if (note > 0) {
+                        mSpeaker.play(note);
+                        note = REST;
+                    } else {
+                        mSpeaker.stop();
+                        note = G4;
+                    }
+
+                    if (++index < mPatternArray.length) {
+                        // Continue playing or stoping vibration.
+                        if (index % 2 == 0 && index == mPatternArray.length -1) {
+                            // Ignor the last stop speaker message.
+                            Log.d(TAG, "==== index Ignor the last stop speaker message " + index);
+                        } else {
+                            mHandler.postDelayed(this, mPatternArray[index]);
+                        }
+                    }
                 }
-                mHandler.postDelayed(this, soundTime);
             } catch (IOException e) {
                 Log.e(TAG, "Error playing speaker", e);
             }
         }
-    };
+    }
 
     /**
      * Vibrates the device with a given pattern.
@@ -175,18 +196,28 @@ public class Vibration extends CordovaPlugin {
      *                    to start repeating, or -1 for no repetition (default).
      */
     public void vibrateWithPattern(long[] pattern, int repeat) {
-        AudioManager manager = (AudioManager) this.cordova.getActivity().getSystemService(Context.AUDIO_SERVICE);
-        if (manager.getRingerMode() != AudioManager.RINGER_MODE_SILENT) {
-            Vibrator vibrator = (Vibrator) this.cordova.getActivity().getSystemService(Context.VIBRATOR_SERVICE);
-            vibrator.vibrate(pattern, repeat);
-        }
+        mPatternArray = pattern;
+        mPlaybackRunnable = new PlaybackRunnable();
+        mHandler.post(mPlaybackRunnable);
+        // AudioManager manager = (AudioManager) this.cordova.getActivity().getSystemService(Context.AUDIO_SERVICE);
+        // if (manager.getRingerMode() != AudioManager.RINGER_MODE_SILENT) {
+        //     Vibrator vibrator = (Vibrator) this.cordova.getActivity().getSystemService(Context.VIBRATOR_SERVICE);
+        //     vibrator.vibrate(pattern, repeat);
+        // }
     }
 
     /**
      * Immediately cancels any currently running vibration.
      */
     public void cancelVibration() {
-        Vibrator vibrator = (Vibrator) this.cordova.getActivity().getSystemService(Context.VIBRATOR_SERVICE);
-        vibrator.cancel();
+        try {
+            mHandler.removeCallbacks(mPlaybackRunnable);
+            mSpeaker.stop();
+        } catch (IOException e) {
+            Log.e(TAG, "Error playing speaker", e);
+        }
+        
+        // Vibrator vibrator = (Vibrator) this.cordova.getActivity().getSystemService(Context.VIBRATOR_SERVICE);
+        // vibrator.cancel();
     }
 }
